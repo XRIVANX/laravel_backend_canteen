@@ -4,21 +4,57 @@ namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class RoleMiddleware
 {
     public function handle(Request $request, Closure $next, ...$roles)
     {
+        // Log the request details
+        Log::info('RoleMiddleware accessed', [
+            'path' => $request->path(),
+            'method' => $request->method(),
+            'has_token' => $request->bearerToken() ? 'Yes' : 'No',
+            'token_preview' => substr($request->bearerToken() ?? '', 0, 10) . '...'
+        ]);
+
         if (!auth()->check()) {
-            return response()->json(['message' => 'Unauthorized'], 401);
+            Log::warning('RoleMiddleware: Auth check failed', [
+                'token' => $request->bearerToken(),
+                'headers' => $request->headers->all()
+            ]);
+            
+            return response()->json([
+                'message' => 'Unauthorized - Not logged in',
+                'debug' => [
+                    'auth_check' => auth()->check(),
+                    'has_token' => !is_null($request->bearerToken()),
+                    'token_preview' => substr($request->bearerToken() ?? '', 0, 10) . '...'
+                ]
+            ], 401);
         }
 
+        $user = auth()->user();
+        
+        Log::info('RoleMiddleware: User authenticated', [
+            'user_id' => $user->id,
+            'user_email' => $user->email,
+            'user_role' => $user->role
+        ]);
+
         foreach ($roles as $role) {
-            if (auth()->user()->role === $role) {
+            if ($user->role === $role) {
                 return $next($request);
             }
         }
 
-        return response()->json(['message' => 'Forbidden - insufficient permissions'], 403);
+        return response()->json([
+            'message' => 'Forbidden - insufficient permissions',
+            'debug' => [
+                'your_role' => $user->role,
+                'required_roles' => $roles
+            ]
+        ], 403);
     }
 }
+

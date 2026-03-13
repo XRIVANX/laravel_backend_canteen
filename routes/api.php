@@ -7,12 +7,107 @@ use App\Http\Controllers\MenuController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\ReportController;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Http\Request;
 
-// Public routes
+// ==================== TEST ROUTES ====================
+Route::post('/test-simple', function(Request $request) {
+    return response()->json([
+        'method' => $request->method(),
+        'headers' => [
+            'content-type' => $request->header('Content-Type'),
+            'accept' => $request->header('Accept')
+        ],
+        'raw_content' => $request->getContent(),
+        'json_decoded' => json_decode($request->getContent(), true),
+        'input_all' => $request->all(),
+        'request_input' => $request->input('name'),
+        'request_json' => $request->json('name')
+    ]);
+})->middleware('auth:sanctum');
+
+Route::post('/debug-post', function(Request $request) {
+    Log::info('DEBUG POST ENDPOINT', [
+        'all' => $request->all(),
+        'json' => $request->json()->all(),
+        'content' => $request->getContent(),
+        'headers' => $request->headers->all()
+    ]);
+    
+    return response()->json([
+        'received' => $request->all(),
+        'json_parsed' => $request->json()->all(),
+        'raw' => $request->getContent(),
+        'content_type' => $request->header('Content-Type')
+    ]);
+})->middleware('auth:sanctum');
+
+Route::post('/test-category-debug', function(Request $request) {
+    try {
+        $rawContent = $request->getContent();
+        $data = json_decode($rawContent, true);
+        
+        return response()->json([
+            'success' => true,
+            'debug' => [
+                'raw_content' => $rawContent,
+                'decoded_data' => $data,
+                'headers' => [
+                    'content-type' => $request->header('Content-Type'),
+                    'accept' => $request->header('Accept')
+                ],
+                'input_all' => $request->all(),
+                'json_all' => $request->json()->all()
+            ]
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'error' => $e->getMessage()
+        ], 500);
+    }
+})->middleware('auth:sanctum');
+
+Route::get('/test-auth', function() {
+    return response()->json([
+        'message' => 'Authentication test endpoint',
+        'authenticated' => auth()->check(),
+        'user' => auth()->user()
+    ]);
+})->middleware('auth:sanctum');
+
+Route::get('/role-test', function() {
+    return response()->json([
+        'message' => 'Role middleware works!',
+        'user' => auth()->user()
+    ]);
+})->middleware(['auth:sanctum', 'role:admin']);
+
+Route::get('/test-category-list', function() {
+    try {
+        $categories = Category::all();
+        return response()->json([
+            'success' => true,
+            'data' => $categories
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'error' => $e->getMessage()
+        ], 500);
+    }
+})->middleware('auth:sanctum');
+
+Route::get('/orders/today-stats', function() {
+    // Returns today's stats specifically for cashier dashboard
+});
+
+// ==================== PUBLIC ROUTES ====================
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 
-// Protected routes
+// ==================== PROTECTED ROUTES ====================
 Route::middleware('auth:sanctum')->group(function () {
     // Auth
     Route::post('/logout', [AuthController::class, 'logout']);
@@ -29,21 +124,60 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/orders', [OrderController::class, 'history']);
     });
 
-    // Cashier and Admin routes
-    Route::middleware('role:cashier,admin')->group(function () {
-        // Orders
-        Route::post('/orders', [OrderController::class, 'store']);
-        Route::get('/orders/queue', [OrderController::class, 'queue']);
-        Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
-        
-        // Inventory
-        Route::get('/inventory/low-stock', [MenuController::class, 'lowStock']);
-        Route::post('/inventory/adjust', [InventoryController::class, 'adjustStock']);
+// ==================== CASHIER AND ADMIN ROUTES ====================
+Route::middleware('role:cashier,admin')->group(function () {
+    // Orders - Cashier accessible
+    Route::post('/orders', [OrderController::class, 'store']);
+    Route::get('/orders/queue', [OrderController::class, 'queue']);
+    Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
+    
+    // ===== ADD THESE CUSTOMER ROUTES HERE =====
+    // Get all customers for POS selection
+    Route::get('/customers', [App\Http\Controllers\UserController::class, 'getCustomers']);
+    
+    // Search customers (optional - for better performance)
+    Route::get('/customers/search', [App\Http\Controllers\UserController::class, 'searchCustomers']);
+    
+    // Get single customer by ID
+    Route::get('/customers/{id}', [App\Http\Controllers\UserController::class, 'getCustomer']);
+    // ==========================================
+    
+    // Cashier Dashboard Stats
+    Route::get('/orders/today-stats', function() {
+        try {
+            $today = now()->format('Y-m-d');
+            $orders = App\Models\Order::whereDate('created_at', $today)
+                           ->whereIn('status', ['pending', 'preparing', 'ready', 'completed'])
+                           ->get();
+            
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_orders' => $orders->count(),
+                    'total_revenue' => $orders->sum('total_amount'),
+                    'pending' => $orders->where('status', 'pending')->count(),
+                    'preparing' => $orders->where('status', 'preparing')->count(),
+                    'ready' => $orders->where('status', 'ready')->count(),
+                    'completed' => $orders->where('status', 'completed')->count(),
+                    'recent_orders' => $orders->sortByDesc('created_at')->take(5)->values()
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage()
+            ], 500);
+        }
     });
+    
+    // Inventory - Cashier accessible
+    Route::get('/inventory/low-stock', [MenuController::class, 'lowStock']);
+    Route::post('/inventory/adjust', [InventoryController::class, 'adjustStock']);
+});
 
-    // Admin only routes
+    // ==================== ADMIN ONLY ROUTES ====================
     Route::middleware('role:admin')->group(function () {
-        // Categories
+        // Categories management
         Route::post('/categories', [CategoryController::class, 'store']);
         Route::put('/categories/{category}', [CategoryController::class, 'update']);
         Route::delete('/categories/{category}', [CategoryController::class, 'destroy']);
@@ -54,7 +188,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/menu/{menuItem}', [MenuController::class, 'destroy']);
         Route::patch('/menu/{menuItem}/toggle', [MenuController::class, 'toggleAvailability']);
 
-        // Inventory
+        // Full inventory management
         Route::get('/inventory/logs', [InventoryController::class, 'logs']);
         Route::post('/inventory/bulk-restock', [InventoryController::class, 'bulkRestock']);
 
@@ -65,8 +199,27 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/reports/order-trend', [ReportController::class, 'orderTrend']);
         Route::get('/reports/summary', [ReportController::class, 'summary']);
 
-        // Orders (full access)
+        // Full orders access
         Route::get('/orders', [OrderController::class, 'index']);
         Route::get('/orders/{order}', [OrderController::class, 'show']);
+
+        // Get all users (admin only)
+    Route::get('/users', function() {
+        try {
+            $users = App\Models\User::select('id', 'name', 'email', 'role')
+                ->orderBy('name')
+                ->get();
+            
+            return response()->json([
+                'success' => true,
+                'data' => $users
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch users'
+            ], 500);
+        }
+    });
     });
 });

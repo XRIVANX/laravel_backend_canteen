@@ -4,12 +4,20 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class category extends Model
+class Category extends Model
 {
-    protected $fillable = ['name', 'description', 'image'];
+    protected $table = 'categories';
+    
+    protected $fillable = [
+        'name', 
+        'description', 
+        'image'
+    ];
+
+    public $timestamps = true;
 
     public function menuItems()
     {
         return $this->hasMany(MenuItem::class);
-    }   
+    }
 }
